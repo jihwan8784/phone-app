@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 class MainViewModel(private val dao: LedgerDao) : ViewModel() {
     val accounts: StateFlow<List<AccountEntity>> = dao.accounts()
@@ -24,6 +26,14 @@ class MainViewModel(private val dao: LedgerDao) : ViewModel() {
     val transactions: StateFlow<List<TransactionEntity>> = selectedAccountId
         .flatMapLatest { id -> if (id == null) kotlinx.coroutines.flow.flowOf(emptyList()) else dao.transactions(id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    init {
+        viewModelScope.launch {
+            accounts.collect { list ->
+                if (selectedAccountId.value == null) selectedAccountId.value = list.firstOrNull()?.id
+            }
+        }
+    }
 
     fun selectAccount(id: Long) { selectedAccountId.value = id }
 
@@ -40,6 +50,52 @@ class MainViewModel(private val dao: LedgerDao) : ViewModel() {
         selectedAccountId.value?.let { id ->
             dao.insertTransaction(TransactionEntity(id, id, java.time.LocalDate.now().toString(), description, amount, type))
         }
+    }
+
+    fun importOcrText(text: String) = viewModelScope.launch {
+        val accountId = selectedAccountId.value ?: return@launch
+        parseStatement(text).forEach { parsed ->
+            dao.insertTransaction(
+                TransactionEntity(
+                    accountId = accountId,
+                    date = parsed.date,
+                    description = parsed.description,
+                    amount = parsed.amount,
+                    type = parsed.type
+                )
+            )
+        }
+    }
+
+    private data class Parsed(val date: String, val description: String, val amount: Long, val type: String)
+
+    private fun parseStatement(text: String): List<Parsed> {
+        val dateRegex = Regex("^(\\d{1,2})[./-](\\d{1,2})$")
+        val amountRegex = Regex("^(-)?([0-9][0-9,]*)\\s*원.*$")
+        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+        val result = mutableListOf<Parsed>()
+        var date: String? = null
+        var description = ""
+        for (line in lines) {
+            val dateMatch = dateRegex.matchEntire(line)
+            if (dateMatch != null) {
+                date = runCatching {
+                    LocalDate.of(LocalDate.now().year, dateMatch.groupValues[1].toInt(), dateMatch.groupValues[2].toInt())
+                        .format(DateTimeFormatter.ISO_LOCAL_DATE)
+                }.getOrNull()
+                description = ""
+                continue
+            }
+            val amountMatch = amountRegex.matchEntire(line)
+            if (amountMatch != null && date != null && description.isNotBlank()) {
+                val amount = amountMatch.groupValues[2].replace(",", "").toLongOrNull() ?: continue
+                result += Parsed(date!!, description, amount, if (amountMatch.groupValues[1].isNotEmpty()) "EXPENSE" else "INCOME")
+                description = ""
+            } else if (!line.matches(Regex("^[0-9,]+원$"))) {
+                description = if (description.isBlank()) line else "$description $line"
+            }
+        }
+        return result
     }
 
     private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")

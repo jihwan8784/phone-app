@@ -70,6 +70,7 @@ private fun LedgerScreen(viewModel: MainViewModel) {
     val transactions by viewModel.transactions.collectAsState()
     var showCreate by remember { mutableStateOf(accounts.isEmpty()) }
     var showDelete by remember { mutableStateOf(false) }
+    var showManual by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("ALL") }
     var ocrText by remember { mutableStateOf("") }
     var ocrError by remember { mutableStateOf("") }
@@ -107,6 +108,12 @@ private fun LedgerScreen(viewModel: MainViewModel) {
                 if (ocrText.isNotBlank()) {
                     Text("OCR 결과", style = MaterialTheme.typography.titleSmall)
                     Text(ocrText, style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { viewModel.importOcrText(ocrText); ocrText = "" }) {
+                        Text("인식된 거래 저장")
+                    }
+                }
+                OutlinedButton(onClick = { showManual = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("거래 직접 입력")
                 }
             } else {
                 Text("계좌를 먼저 만들어 주세요.")
@@ -117,6 +124,10 @@ private fun LedgerScreen(viewModel: MainViewModel) {
 
     if (showCreate) CreateAccountDialog(onDismiss = { showCreate = false }, onCreate = { name, password -> viewModel.createAccount(name, password); showCreate = false })
     if (showDelete && selectedId != null) DeleteAccountDialog(onDismiss = { showDelete = false }, onDelete = { password -> viewModel.deleteAccount(selectedId!!, password) { showDelete = false } })
+    if (showManual) ManualTransactionDialog(
+        onDismiss = { showManual = false },
+        onSave = { description, amount, type -> viewModel.addTransaction(description, amount, type); showManual = false }
+    )
 }
 
 @Composable
@@ -139,4 +150,29 @@ private fun CreateAccountDialog(onDismiss: () -> Unit, onCreate: (String, String
 private fun DeleteAccountDialog(onDismiss: () -> Unit, onDelete: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("계좌 삭제") }, text = { OutlinedTextField(password, { password = it }, label = { Text("비밀번호") }) }, confirmButton = { TextButton(onClick = { onDelete(password) }) { Text("삭제") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } })
+}
+
+@Composable
+private fun ManualTransactionDialog(onDismiss: () -> Unit, onSave: (String, Long, String) -> Unit) {
+    var description by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("EXPENSE") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("거래 직접 입력") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(description, { description = it }, label = { Text("내용") })
+                OutlinedTextField(amount, { amount = it.filter(Char::isDigit) }, label = { Text("금액") })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = type == "EXPENSE", onClick = { type = "EXPENSE" }, label = { Text("지출") })
+                    FilterChip(selected = type == "INCOME", onClick = { type = "INCOME" }, label = { Text("수입") })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { amount.toLongOrNull()?.let { onSave(description, it, type) } }) { Text("저장") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+    )
 }
